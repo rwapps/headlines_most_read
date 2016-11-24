@@ -1,13 +1,19 @@
 package main
 
 import (
+  "encoding/base64"
 	"fmt"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/analyticsreporting/v4"
+  "crypto"
+  "crypto/rsa"
+  "crypto/sha256"
+  "crypto/rand"
+	//"golang.org/x/oauth2"
+	//"golang.org/x/oauth2/google"
+	//"google.golang.org/api/analyticsreporting/v4"
 	"log"
-	//"io/ioutil"
-	//"encoding/json"
+	"io/ioutil"
+	"encoding/json"
+  "time"
 )
 
 // Create jwt: header, claim set signature:
@@ -16,54 +22,73 @@ import (
 type Config struct {
 	ServiceAccountID string
 	KeyID            string
+  JWTClaimSet      JWTClaimSet
 	//YoutubeApiKey string   `json:"YoutubeApiKey"`
 	//GAToken   string   `json:"GAToken"`
 	//Categories    []string `json:"Categories"`
+}
+
+type JWTClaimSet struct {
+  Iss string `json:"iss"`
+  Scope string `json:"scope"`
+  Aud string `json:"aud"`
+  Exp int64 `json:"exp"`
+  Iat int64 `json:"iat"`
+  Sub string `json:"sub"`
 }
 
 var config Config
 
 // init read the configuration file and initialize github SHAs
 
+// Initialize oauth and analytics client
+// make query to analytics, get the top 10
+// get reports from rwapi
+// write reports to gist
+
+// Initialize oauth and analytics client
 func main() {
     fmt.Println("here")
-	ctx := oauth2.NoContext
-	ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/devstorage.readonly")
-	if err != nil {
-    fmt.Printf("the error is %s", err)
-	}
-	httpClient := oauth2.NewClient(ctx, ts)
-	service, err := analyticsreporting.New(httpClient)
-	reportRequest := analyticsreporting.ReportRequest{ViewId: "75062", PageSize: 10}
-	getReportsRequest := analyticsreporting.GetReportsRequest{}
-	getReportsRequest.ReportRequests = append(getReportsRequest.ReportRequests, &reportRequest)
-	reportsService := analyticsreporting.NewReportsService(service)
-	reportsBatchGetCall := reportsService.BatchGet(&getReportsRequest)
-	response, err := reportsBatchGetCall.Do()
-	if err != nil {
-		log.Fatal("Cannot create defaultTokenSource.")
-	}
-	fmt.Println(response)
 
-	//data, err := ioutil.ReadFile("config/config.json")
-	//if err != nil {
-	//	log.Fatal("Cannot read configuration file.")
-	//}
-	//err = json.Unmarshal(data, &config)
-	//if err != nil {
-	//	log.Fatal("Invalid configuration file.")
-	//}
-	//ts := oauth2.StaticTokenSource(
-	//	&oauth2.Token{AccessToken: config.GAToken},
-	//)
+	data, err := ioutil.ReadFile("config/config.json")
+	if err != nil {
+		log.Fatal("Cannot read configuration file.")
+	}
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		log.Fatal("Invalid configuration file.")
+	}
+  // header
+  headerByte := []byte("{\"alg\":\"RS256\",\"typ\":\"JWT\"}")
+  header := base64.StdEncoding.EncodeToString(headerByte)
+  fmt.Println(header)
+  jwtClaimSet := config.JWTClaimSet
+  jwtClaimSet.Exp = time.Now().Unix()
+  jwtClaimSet.Iat = time.Now().Add(time.Hour).Unix()
+  fmt.Println(jwtClaimSet)
+  // claim set
+  claimSetJson, err := json.Marshal(jwtClaimSet)
+  if err != nil {
+		log.Fatal("Failed marshaling claimset.")
+  }
+  claimSet := base64.StdEncoding.EncodeToString(claimSetJson)
+  fmt.Println(claimSet)
+  // JWS
+  rng := rand.Reader
+  message := []byte(fmt.Sprint("{", header, "}.{", claimSet, "}"))
+  hashed := sha256.Sum256(message)
+  //rsa.PrivateKey
+  signature, err := rsa.SignPKCS1v15(rng, config.KeyID, crypto.SHA256, hashed[:])
+  if err != nil {
+		log.Fatal("Failed signing.")
+  }
+  fmt.Println(signature)
 
-	//  {
-	//    "iss":"761326798069-r5mljlln1rd4lrbhg75efgigp36m78j5@developer.gserviceaccount.com",
-	//    "scope":"https://www.googleapis.com/auth/devstorage.readonly",
-	//    "aud":"https://www.googleapis.com/oauth2/v4/token",
-	//    "exp":1328554385,
-	//    "iat":1328550785
-	//  }
+
+
+
+
+
 	//_ = oauth2.NewClient(oauth2.NoContext, ts)
 	//tc := oauth2.NewClient(oauth2.NoContext, ts)
 	//client := github.NewClient(tc)
@@ -73,10 +98,6 @@ func main() {
 	//}
 }
 
-// Initialize oauth and analytics client
-// make query to analytics, get the top 10
-// get reports from rwapi
-// write reports to gist
 
 //  /*
 //   * Initialize the connection to Google Analtycs account
