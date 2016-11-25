@@ -1,55 +1,115 @@
 package main
 
 import (
-  "encoding/base64"
-	"fmt"
-  "crypto"
-  "crypto/rsa"
-  "crypto/sha256"
-  "crypto/rand"
-	//"golang.org/x/oauth2"
-	//"golang.org/x/oauth2/google"
-	//"google.golang.org/api/analyticsreporting/v4"
-	"log"
-	"io/ioutil"
+	"bytes"
 	"encoding/json"
-  "time"
+	"fmt"
+	"golang.org/x/net/context"
+	"golang.org/x/oauth2/jwt"
+	"google.golang.org/api/analyticsreporting/v4"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"strconv"
 )
 
-// Create jwt: header, claim set signature:
-
-// Config contains the site configuration.
 type Config struct {
-	ServiceAccountID string
-	KeyID            string
-  JWTClaimSet      JWTClaimSet
-	//YoutubeApiKey string   `json:"YoutubeApiKey"`
-	//GAToken   string   `json:"GAToken"`
-	//Categories    []string `json:"Categories"`
+	GistToken string
+	GistId    string
+	JWT       struct {
+		Client_email   string
+		Private_key_id string
+		Private_key    string
+	}
 }
 
 type JWTClaimSet struct {
-  Iss string `json:"iss"`
-  Scope string `json:"scope"`
-  Aud string `json:"aud"`
-  Exp int64 `json:"exp"`
-  Iat int64 `json:"iat"`
-  Sub string `json:"sub"`
+	Iss   string `json:"iss"`
+	Scope string `json:"scope"`
+	Aud   string `json:"aud"`
+	Exp   int64  `json:"exp"`
+	Iat   int64  `json:"iat"`
+	Sub   string `json:"sub"`
+}
+
+type Content struct {
+	Data []struct {
+		Id     string
+		Fields struct {
+			Title  string
+			Source []struct {
+				Shortname string
+			}
+			Date struct {
+				Created string
+			}
+			Country []struct {
+				Shortname string
+			}
+		}
+	}
+}
+
+type Reports map[string]Report
+
+// TODO: fix what we want here.
+// Summary is for headlines only - do we want only most-read that are headlines?
+type Report struct {
+	URL       string `json:"url"`
+	URL_alias string `json:"url_alias"`
+	Id        string `json:"id"`
+	Language  string `json:"language"`
+	Title     string `json:"title"`
+	//Summary string `json:"url"`
+	//ImgSmall string `json:"url"`
+	//Img string `json:"url"`
+	Date          string         `json:"date"`
+	Countries     []Country      `json:"country"`
+	Themes        []Theme        `json:"theme"`
+	BodyHtml      string         `json:"body-html"`
+	Organizations []Organization `json:"source"`
+	File          string         `json:"file"`
+}
+
+type Date struct {
+	Created string `json:"created"`
+}
+
+type Organization struct {
+	Name  string
+	Image string
+}
+
+type Country struct {
+	URL     string
+	Id      int
+	Name    string
+	Iso3    string
+	Primary bool
+}
+
+type Theme struct {
+	Id   int
+	Name string
+}
+
+type Filter struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+}
+
+type Fields struct {
+	Include []string `json:"include"`
+}
+
+type Params struct {
+	Fields `json:"fields"`
+	Filter `json:"filter"`
 }
 
 var config Config
 
-// init read the configuration file and initialize github SHAs
-
-// Initialize oauth and analytics client
-// make query to analytics, get the top 10
-// get reports from rwapi
-// write reports to gist
-
-// Initialize oauth and analytics client
-func main() {
-    fmt.Println("here")
-
+func init() {
 	data, err := ioutil.ReadFile("config/config.json")
 	if err != nil {
 		log.Fatal("Cannot read configuration file.")
@@ -58,106 +118,145 @@ func main() {
 	if err != nil {
 		log.Fatal("Invalid configuration file.")
 	}
-  // header
-  headerByte := []byte("{\"alg\":\"RS256\",\"typ\":\"JWT\"}")
-  header := base64.StdEncoding.EncodeToString(headerByte)
-  fmt.Println(header)
-  jwtClaimSet := config.JWTClaimSet
-  jwtClaimSet.Exp = time.Now().Unix()
-  jwtClaimSet.Iat = time.Now().Add(time.Hour).Unix()
-  fmt.Println(jwtClaimSet)
-  // claim set
-  claimSetJson, err := json.Marshal(jwtClaimSet)
-  if err != nil {
-		log.Fatal("Failed marshaling claimset.")
-  }
-  claimSet := base64.StdEncoding.EncodeToString(claimSetJson)
-  fmt.Println(claimSet)
-  // JWS
-  rng := rand.Reader
-  message := []byte(fmt.Sprint("{", header, "}.{", claimSet, "}"))
-  hashed := sha256.Sum256(message)
-  //rsa.PrivateKey
-  signature, err := rsa.SignPKCS1v15(rng, config.KeyID, crypto.SHA256, hashed[:])
-  if err != nil {
-		log.Fatal("Failed signing.")
-  }
-  fmt.Println(signature)
-
-
-
-
-
-
-	//_ = oauth2.NewClient(oauth2.NoContext, ts)
-	//tc := oauth2.NewClient(oauth2.NoContext, ts)
-	//client := github.NewClient(tc)
-	//ref, _, err := client.Git.GetRef("rwapps", "video_backups", "heads/master")
-	//if err != nil {
-	//	log.Fatal("git getref error")
-	//}
 }
 
+// make query to analytics, get the top 10
+func getMostRead() *analyticsreporting.Report {
+	var scopes []string
+	scopes = append(scopes, "https://www.googleapis.com/auth/analytics.readonly")
+	jwtConfig := jwt.Config{
+		Email:        config.JWT.Client_email,
+		PrivateKey:   []byte(config.JWT.Private_key),
+		PrivateKeyID: config.JWT.Private_key_id,
+		Scopes:       scopes,
+		TokenURL:     "https://www.googleapis.com/oauth2/v4/token",
+	}
+	ctx := context.Background()
+	client := jwtConfig.Client(ctx)
+	analyticsreportingService, err := analyticsreporting.New(client)
+	if err != nil {
+		log.Fatal("no new service.")
+	}
+	var metrics []*analyticsreporting.Metric
+	metrics = append(metrics, &analyticsreporting.Metric{Expression: "ga:pageviews"})
+	var dimensions []*analyticsreporting.Dimension
+	dimensions = append(dimensions, &analyticsreporting.Dimension{Name: "ga:pagePath"})
+	dimensions = append(dimensions, &analyticsreporting.Dimension{Name: "ga:pageTitle"})
+	var orderBys []*analyticsreporting.OrderBy
+	orderBys = append(orderBys, &analyticsreporting.OrderBy{
+		FieldName: "ga:pageviews",
+		OrderType: "VALUE",
+		SortOrder: "DESCENDING",
+	})
+	var reportRequests []*analyticsreporting.ReportRequest
+	request := &analyticsreporting.ReportRequest{
+		Dimensions:        dimensions,
+		FiltersExpression: "ga:dimension1==Report",
+		Metrics:           metrics,
+		OrderBys:          orderBys,
+		PageSize:          20,
+		SamplingLevel:     "LARGE",
+		ViewId:            "75062",
+	}
+	reportRequests = append(reportRequests, request)
+	getReportsRequest := &analyticsreporting.GetReportsRequest{ReportRequests: reportRequests}
+	reportsService := analyticsreporting.NewReportsService(analyticsreportingService)
+	reportsBatchGetCall := reportsService.BatchGet(getReportsRequest)
+	response, err := reportsBatchGetCall.Do()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return response.Reports[0]
+}
 
-//  /*
-//   * Initialize the connection to Google Analtycs account
-//   */
-//  function initializeAnalytics()
-//  {
-//      $KEY_FILE_LOCATION = __DIR__ . '/credentials.json';
-//      $client = new Google_Client();
-//      $client->setAuthConfig($KEY_FILE_LOCATION);
-//      $client->setScopes(['https://www.googleapis.com/auth/analytics.readonly']);
-//      $analytics = new Google_Service_Analytics($client);
-//      return $analytics;
-//  }
-//  /*
-//   * Return the most read reports in the Google Analytics format
-//   */
-//  function getResults($analytics, $profileId, $startDate, $endDate, $numberOfResults)
-//  {
-//      return $analytics->data_ga->get(
-//          'ga:' . $profileId,
-//  	$startDate,
-//          $endDate,
-//          'ga:sessions, ga:pageviews, ga:socialInteractions',
-//           array('dimensions'    => 'ga:pagePath, ga:pageTitle',
-//  	       'sort'          => '-ga:pageviews',
-//  	       'filters'       => 'ga:dimension1==Report',
-//  	       'samplingLevel' => 'HIGHER_PRECISION',
-//  	       'max-results'   => $numberOfResults
-//  		)
-//  	);
-//  }
-//  /*
-//   * Use the RW API to get the reports with the url_alias provided by Google Analytics
-//   */
-//  function getReports($results, $webhost, $apiEndPoint)
-//  {
-//      $jsons = array();
-//      foreach($results["rows"] as $result)
-//      {
-//          $url = urlencode($webhost . $result[0]);
-//          $content = file_get_contents($apiEndPoint . "?filter[field]=url_alias&filter[value]=" . $url);
-//  	$content = json_decode($content, true);
-//  	$href = $content["data"][0]["href"];
-//  	$jsons[] = file_get_contents($href);
-//      }
-//      return $jsons;
-//  }
-//  $analytics = initializeAnalytics();
-//  $results = getResults($analytics, $profileId, $startDate, $endDate, $numberOfResults);
-//  $reports = getReports($results, $webhost, $apiEndPoint);
-//  /*
-//   * Write the reports in the gist
-//   */
-//  $data   = array("files" => array($gistFilename => array( "content" => json_encode($reports))));
-//  $header = array("Authorization: token " . $gistToken, "User-Agent: ReliefWeb API");
-//  $curl = curl_init();
-//  curl_setopt($curl, CURLOPT_URL, $gist);
-//  curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-//  curl_setopt($curl, CURLOPT_CUSTOMREQUEST, 'PATCH');
-//  curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($data));
-//  curl_setopt($curl, CURLOPT_HTTPHEADER, $header);
-//  curl_exec($curl);
-//  curl_close($curl);
+func getReports() map[string]Report {
+	analyticsReport := getMostRead()
+	reports := make(map[string]Report)
+	var params Params
+	params.Fields.Include = []string{"title", "source.shortname", "country.shortname", "date.created"}
+	params.Filter.Field = "url_alias"
+	i := 1
+	for _, row := range analyticsReport.Data.Rows {
+		url := fmt.Sprint("http://reliefweb.int", row.Dimensions[0])
+		report := Report{URL: url}
+		params.Filter.Value = url
+		report = addRWData(report, params)
+		reports[strconv.Itoa(i)] = report
+		i++
+		if i > 10 {
+			return reports
+		}
+	}
+	return reports
+}
+
+func addRWData(report Report, params Params) Report {
+	paramsJson, err := json.Marshal(params)
+	if err != nil {
+		log.Fatal(err)
+	}
+	resp, err := http.Post("http://api.reliefweb.int/v1/reports", "application/json", bytes.NewBuffer(paramsJson))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	content := Content{}
+	err = json.Unmarshal(body, &content)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, data := range content.Data {
+		report.Id = data.Id
+		report.Date = data.Fields.Date.Created
+		report.Title = data.Fields.Title
+		for _, source := range data.Fields.Source {
+			report.Organizations = append(report.Organizations, Organization{Name: source.Shortname})
+		}
+		for _, country := range data.Fields.Country {
+			report.Countries = append(report.Countries, Country{Name: country.Shortname})
+		}
+	}
+	return report
+}
+
+func updateGist(name string, gistId string, content []byte) {
+	token := config.GistToken
+	url := "https://api.github.com/gists/" + gistId
+	payload := fmt.Sprintf("{ \"files\": { \"%s.json\": { \"content\": %q } } }", name, content)
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer([]byte(payload)))
+	if err != nil {
+		panic(err)
+	}
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "rwapps")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("failed to readall body")
+	}
+	// TODO: Add error feedback
+	if resp.Status == "200 OK" {
+		fmt.Println("Success")
+	} else {
+		fmt.Printf("Failed updating gist, error body\n %s\n", body)
+	}
+}
+
+func main() {
+	reports := getReports()
+	reportsJson, err := json.Marshal(reports)
+	if err != nil {
+		panic(err)
+	}
+	updateGist("most_read", config.GistId, reportsJson)
+}
