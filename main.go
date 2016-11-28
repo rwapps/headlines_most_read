@@ -110,7 +110,7 @@ type Params struct {
 var config Config
 
 func init() {
-	data, err := ioutil.ReadFile("config/config.json")
+	data, err := ioutil.ReadFile("/go/src/github.com/rwapps/headlines_most_read/config/config.json")
 	if err != nil {
 		log.Fatal("Cannot read configuration file.")
 	}
