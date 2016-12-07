@@ -76,7 +76,7 @@ type Report struct {
 	Image         string         `json:"image"`
 	Type          string         `json:"type"`
 	Date          string         `json:"date"`
-	BodyHtml      string         `json:"body-html"`
+	BodyHtml      string         `json:"body_html"`
 	Organizations []Organization `json:"source"`
 	Files         []string       `json:"files"`
 }
@@ -86,22 +86,9 @@ type Date struct {
 }
 
 type Organization struct {
-	Id    string
-	Name  string
-	Image string
-}
-
-type Country struct {
-	URL     string
-	Id      int
-	Name    string
-	Iso3    string
-	Primary bool
-}
-
-type Theme struct {
-	Id   int
-	Name string
+	Id    string `json:"id"`
+	Name  string `json:"name"`
+	Image string `json:"image"`
 }
 
 type Filter struct {
