@@ -58,6 +58,7 @@ type Content struct {
 
 type Source struct {
 	Data []struct {
+		Id     string
 		Fields struct {
 			Logo struct {
 				URL string
@@ -65,8 +66,6 @@ type Source struct {
 		}
 	}
 }
-
-type Reports map[string]Report
 
 type Report struct {
 	URL           string         `json:"url"`
@@ -155,9 +154,9 @@ func getMostRead() *analyticsreporting.Report {
 	return response.Reports[0]
 }
 
-func getReports() map[string]Report {
+func getReports() []Report {
 	analyticsReport := getMostRead()
-	reports := make(map[string]Report)
+	reports := []Report{}
 	var params Params
 	params.Fields.Include = []string{"title", "body-html", "url_alias", "source.id", "file.url", "image.url-small", "source.shortname", "image.url-small", "country.shortname", "date.created"}
 	params.Filter.Field = "url_alias"
@@ -168,12 +167,12 @@ func getReports() map[string]Report {
 		report := Report{URL_alias: url_alias}
 		params.Filter.Value = append(params.Filter.Value, url_alias)
 		// TODO: add err if we have incomplete information. If so, continue.
-		reports[strconv.Itoa(i)] = report
+		reports = append(reports, report)
 		i++
 		// 8 is enough.
 		if i > 8 {
-			addRWDataMultiple(reports, params)
-			return reports
+			newReports := addRWDataMultiple(reports, params)
+			return newReports
 		}
 	}
 	return reports
@@ -196,7 +195,7 @@ func queryRWApi(contentType string, params Params) []byte {
 	return body
 }
 
-func addRWDataMultiple(reports map[string]Report, params Params) map[string]Report {
+func addRWDataMultiple(reports []Report, params Params) []Report {
 	contentType := "reports"
 	body := queryRWApi(contentType, params)
 	content := Content{}
@@ -205,46 +204,49 @@ func addRWDataMultiple(reports map[string]Report, params Params) map[string]Repo
 		log.Fatal(err)
 	}
 	sourceIds := []string{}
+	newReports := []Report{}
 	for _, data := range content.Data {
-		for k, _ := range reports {
-			if reports[k].URL_alias == data.Fields.URL_alias {
-				report := reports[k]
-				report.Id = data.Id
-				report.URL = fmt.Sprint("http://reliefweb.int/node/", data.Id)
-				report.Date = data.Fields.Date.Created
-				report.Title = data.Fields.Title
-				report.Type = "report"
-				report.BodyHtml = data.Fields.Body_html
-				report.Image = data.Fields.Image.URL_small
+		for _, report := range reports {
+			if report.URL_alias == data.Fields.URL_alias {
+				newReport := Report{}
+				newReport.URL_alias = data.Fields.URL_alias
+				newReport.Id = data.Id
+				newReport.URL = fmt.Sprint("http://reliefweb.int/node/", data.Id)
+				newReport.Date = data.Fields.Date.Created
+				newReport.Title = data.Fields.Title
+				newReport.Type = "report"
+				newReport.BodyHtml = data.Fields.Body_html
+				newReport.Image = data.Fields.Image.URL_small
 				for _, source := range data.Fields.Source {
 					sourceId := strconv.Itoa(source.Id)
 					sourceIds = append(sourceIds, sourceId)
-					report.Organizations = append(report.Organizations, Organization{Name: source.Shortname, Id: sourceId})
+					newReport.Organizations = append(report.Organizations, Organization{Name: source.Shortname, Id: sourceId})
 				}
 				for _, file := range data.Fields.File {
-					report.Files = append(report.Files, file.URL)
+					newReport.Files = append(report.Files, file.URL)
 				}
-				reports[k] = report
+				newReports = append(newReports, newReport)
 				break
 			}
 		}
 	}
-	reports = addSourceImages(sourceIds, reports)
-	return reports
+	newReports = addSourceImages(sourceIds, newReports)
+	return newReports
 }
 
-func addSourceImages(sourceIds []string, reports map[string]Report) map[string]Report {
+func addSourceImages(sourceIds []string, reports []Report) []Report {
 	sourceImages := getSourceImages(sourceIds)
-	for k, _ := range reports {
-		report := reports[k]
+	newReports := []Report{}
+	for _, report := range reports {
+		newReport := report
 		for index, _ := range report.Organizations {
 			organization := report.Organizations[index]
 			organization.Image = sourceImages[organization.Id]
-			report.Organizations[index] = organization
+			newReport.Organizations[index] = organization
 		}
-		reports[k] = report
+		newReports = append(newReports, newReport)
 	}
-	return reports
+	return newReports
 }
 
 func getSourceImages(sourceIds []string) map[string]string {
@@ -260,9 +262,7 @@ func getSourceImages(sourceIds []string) map[string]string {
 		log.Fatal(err)
 	}
 	for _, data := range source.Data {
-		for _, v := range sourceIds {
-			sourceImages[v] = data.Fields.Logo.URL
-		}
+		sourceImages[data.Id] = data.Fields.Logo.URL
 	}
 	return sourceImages
 }
